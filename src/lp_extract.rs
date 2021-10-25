@@ -111,7 +111,7 @@ where
                     continue;
                 }
 
-                for child in node.children() {
+                for child in node.children().map(|c| egraph.find(*c)) {
                     let child_active = vars[child].active;
                     // node active implies child active, encoded as:
                     //   node_active <= child_active
