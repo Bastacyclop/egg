@@ -146,7 +146,7 @@ impl Machine {
         dfg: &RecExpr<L>,
         instructions: &[Instruction<L>],
         subst: &Subst,
-        yield_fn: &mut impl FnOnce(&Self, &Subst),
+        yield_fn: &mut impl FnMut(&Self, &Subst),
     ) where
         L: Language,
     {
@@ -155,20 +155,20 @@ impl Machine {
             match instruction {
                 Instruction::Bind { i, out, node } => {
                     let remaining_instructions = instructions.as_slice();
-                    let matched = dfg[self.reg(*i)];
+                    let matched = &dfg[self.reg(*i)];
                     if node.matches(matched) {
                         self.reg.truncate(out.0 as usize);
                         matched.for_each(|id| self.reg.push(id));
-                        self.run(dfg, remaining_instructions, subst, yield_fn)
+                        self.run_dfg(dfg, remaining_instructions, subst, yield_fn)
                     }
                     return;
                 }
                 Instruction::Scan { out } => {
                     let remaining_instructions = instructions.as_slice();
-                    for (i, node) in dfg.as_ref().enumerate() {
+                    for (i, _) in dfg.as_ref().iter().enumerate() {
                         self.reg.truncate(out.0 as usize);
                         self.reg.push(Id::from(i));
-                        self.run(dfg, remaining_instructions, subst, yield_fn)
+                        self.run_dfg(dfg, remaining_instructions, subst, yield_fn)
                     }
                     return;
                 }
@@ -427,11 +427,11 @@ impl<L: Language> Program<L> {
         matches
     }
 
-    pub fn run_dfg(&self, dfg: &RecExpr<L>, node: Id) -> Option<Subst> {
+    pub fn run_dfg(&self, dfg: &RecExpr<L>, node: Id) -> Vec<Subst> {
         let mut machine = Machine::default();
         machine.reg.push(node);
 
-        let mut matches = None;
+        let mut matches = Vec::new();
         machine.run_dfg(dfg, &self.instructions, &self.subst, &mut |machine, subst| {
             let subst_vec = subst
                 .vec
@@ -439,8 +439,7 @@ impl<L: Language> Program<L> {
                 // HACK we are reusing Ids here, this is bad
                 .map(|(v, reg_id)| (*v, machine.reg(Reg(usize::from(*reg_id) as u32))))
                 .collect();
-            assert!(matches.is_none());
-            matches = Some(Subst { vec: subst_vec });
+            matches.push(Subst { vec: subst_vec });
         });
 
         matches
