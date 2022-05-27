@@ -141,9 +141,9 @@ impl Machine {
         yield_fn(self, subst)
     }
 
-    fn run_dfg<L>(
+    fn run_graph<L>(
         &mut self,
-        dfg: &RecExpr<L>,
+        graph: &Graph<L>,
         instructions: &[Instruction<L>],
         subst: &Subst,
         yield_fn: &mut impl FnMut(&Self, &Subst),
@@ -155,20 +155,20 @@ impl Machine {
             match instruction {
                 Instruction::Bind { i, out, node } => {
                     let remaining_instructions = instructions.as_slice();
-                    let matched = &dfg[self.reg(*i)];
+                    let matched = &graph[self.reg(*i)];
                     if node.matches(matched) {
                         self.reg.truncate(out.0 as usize);
                         matched.for_each(|id| self.reg.push(id));
-                        self.run_dfg(dfg, remaining_instructions, subst, yield_fn)
+                        self.run_graph(graph, remaining_instructions, subst, yield_fn)
                     }
                     return;
                 }
                 Instruction::Scan { out } => {
                     let remaining_instructions = instructions.as_slice();
-                    for (i, _) in dfg.as_ref().iter().enumerate() {
+                    for (&id, _) in graph.nodes() {
                         self.reg.truncate(out.0 as usize);
-                        self.reg.push(Id::from(i));
-                        self.run_dfg(dfg, remaining_instructions, subst, yield_fn)
+                        self.reg.push(id);
+                        self.run_graph(graph, remaining_instructions, subst, yield_fn)
                     }
                     return;
                 }
@@ -427,12 +427,12 @@ impl<L: Language> Program<L> {
         matches
     }
 
-    pub fn run_dfg(&self, dfg: &RecExpr<L>, node: Id) -> Vec<Subst> {
+    pub fn run_graph(&self, g: &Graph<L>, node: Id) -> Vec<Subst> {
         let mut machine = Machine::default();
         machine.reg.push(node);
 
         let mut matches = Vec::new();
-        machine.run_dfg(dfg, &self.instructions, &self.subst, &mut |machine, subst| {
+        machine.run_graph(g, &self.instructions, &self.subst, &mut |machine, subst| {
             let subst_vec = subst
                 .vec
                 .iter()

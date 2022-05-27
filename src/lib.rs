@@ -36,6 +36,7 @@ pub mod tutorials;
 
 mod dot;
 mod eclass;
+mod graph;
 mod egraph;
 mod explain;
 mod extract;
@@ -87,6 +88,7 @@ pub(crate) use {explain::Explain, explain::Justification, unionfind::UnionFind};
 pub use {
     dot::Dot,
     eclass::EClass,
+    graph::Graph,
     egraph::EGraph,
     explain::{Explanation, FlatExplanation, FlatTerm, TreeExplanation, TreeTerm},
     extract::*,

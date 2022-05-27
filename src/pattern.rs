@@ -240,6 +240,23 @@ impl<L: Language + Display> Display for Pattern<L> {
     }
 }
 
+impl<L: Language> Pattern<L> {
+    pub fn search_graph(&self, g: &Graph<L>) -> Option<(Id, Subst)> {
+        // TODO? could maintain nodes by op
+        for (&id, _) in g.nodes() {
+            let mut substs = self.program.run_graph(g, id);
+            if let Some(subst) = substs.pop() {
+                if !substs.is_empty() {
+                    println!("multiple hits");
+                }
+                return Some((id, subst));
+            }
+        }
+
+        None
+    }
+}
+
 /// The result of searching a [`Searcher`] over one eclass.
 ///
 /// Note that one [`SearchMatches`] can contain many found
