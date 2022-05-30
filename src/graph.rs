@@ -300,42 +300,52 @@ impl<L: Language> Graph<L> {
         true
     }
 
-    pub fn as_egraph(&self) -> EGraph<L, ()> {
+    pub fn as_dfg(&self) -> RecExpr<L> {
         let mut topo = Vec::with_capacity(self.nodes().len());
         let mut visited = HashSet::default();
+        let mut to_topo = HashMap::default();
         // with_capacity(self.nodes().len());
-        
+
         fn visit<L: Language>(
             id: &Id,
-            topo: &mut Vec<(Id, L)>,
+            topo: &mut Vec<L>,
             visited: &mut HashSet<Id>,
+            to_topo: &mut HashMap<Id, Id>,
             g: &Graph<L>,
         ) {
             if !visited.contains(id) {
                 visited.insert(*id);
 
                 let node = &g[*id];
-                node.for_each(|c| visit(&c, topo, visited, g));
-                topo.push((*id, node.clone()));
+                let node2 = node.clone().map_children(|c| {
+                    visit(&c, topo, visited, to_topo, g);
+                    *to_topo.get(&c).unwrap()
+                });
+                to_topo.insert(*id, Id::from(topo.len()));
+                topo.push(node2);
             }
         }
 
         for (id, _) in self.nodes() {
-            visit(id, &mut topo, &mut visited, self);
+            visit(id, &mut topo, &mut visited, &mut to_topo, self);
         }
 
         assert!(topo.len() == self.nodes.len());
+        RecExpr::from(topo)
+    }
 
-        let mut added = HashMap::default();
-        // with_capacity(topo.len());
+    pub fn as_egraph(&self) -> EGraph<L, ()> {
+        let dfg = self.as_dfg();
+        let topo = dfg.as_ref();
+
         let mut eg = EGraph::default();
-        for (id, n) in topo.drain(..) {
-            let enode = n.clone().map_children(|c| added[&c]);
-            added.insert(id, eg.add(enode));
+        let mut ids = Vec::with_capacity(topo.len());
+        for n in topo {
+            let enode = n.clone().map_children(|c| ids[usize::from(c)]);
+            ids.push(eg.add(enode));
         }
 
         assert!(eg.number_of_classes() == self.nodes.len());
-
         eg
     }
 }
@@ -430,6 +440,7 @@ mod tests {
             let mut g = Graph::from_dfg(&dfg, roots);
     
             println!("{:?}", g);
+            // g.to_svg("/tmp/g0.svg").unwrap();
     
             let lhs = "(+ ?x 0)".parse::<Pattern<S>>().unwrap();
             let rhs = "?x".parse::<Pattern<S>>().unwrap();
@@ -439,6 +450,7 @@ mod tests {
                 println!("{:?}: {:?}", id, subst);
                 g.replace(id, &rhs.ast, &subst);
                 counter += 1;
+                // g.to_svg(format!("/tmp/g{}.svg", counter)).unwrap();
             }
     
             assert!(counter == 3);
