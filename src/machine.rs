@@ -179,13 +179,12 @@ impl Machine {
                 }
                 Instruction::Lookup { term, i } => {
                     self.lookup.clear();
-                    panic!("did not implement lookup");
-                    /*
+                    
                     for node in term {
                         match node {
                             ENodeOrReg::ENode(node) => {
                                 let look = |i| self.lookup[usize::from(i)];
-                                match egraph.lookup(node.clone().map_children(look)) {
+                                match graph.lookup(node.clone().map_children(look)) {
                                     Some(id) => self.lookup.push(id),
                                     None => return,
                                 }
@@ -196,11 +195,10 @@ impl Machine {
                         }
                     }
 
-                    let id = egraph.find(self.reg(*i));
+                    let id = self.reg(*i);
                     if self.lookup.last().copied() != Some(id) {
                         return;
                     }
-                    */
                 }
             }
         }
