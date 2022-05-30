@@ -150,12 +150,14 @@ impl<L: Language> Graph<L> {
         println!("replacement inserted: {:?}", self);
 
         // 3. restore hash-consing invariant broken by dummy
-        let find = self.merge_upwards(vec![replacement]);
+        let canonicalized = self.merge_upwards(vec![replacement]);
 
         println!("merged upwards: {:?}", self);
 
         // 4. collect garbage
-        self.may_remove(*find.get(&original).unwrap_or(&original));
+        if canonicalized.get(&original).is_none() {
+            self.may_remove(original);
+        }
 
         println!("garbage collected: {:?}", self);
 
@@ -442,6 +444,23 @@ mod tests {
             assert!(counter == 3);
             println!("{:?}", g);
             assert!(g.nodes().len() == 1);
+            assert!(g.roots == g.nodes().map(|(&id, _)| id).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn lookup_rule() {
+        let dfg = "(+ 1 2)".parse::<RecExpr<S>>().unwrap();
+        let roots = vec![Id::from(dfg.as_ref().len() - 1)];
+        let mut g = Graph::from_dfg(&dfg, roots);
+
+        let lhs = "(+ 1 2)".parse::<Pattern<S>>().unwrap();
+        let rhs = "3".parse::<Pattern<S>>().unwrap();
+
+        let (id, subst) = lhs.search_graph(&g).unwrap();
+        g.replace(id, &rhs.ast, &subst);
+
+        assert!(g.nodes().len() == 1);
+        assert!(g.roots == g.nodes().map(|(&id, _)| id).collect::<Vec<_>>());
     }
 }

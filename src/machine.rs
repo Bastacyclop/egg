@@ -184,7 +184,7 @@ impl Machine {
                         match node {
                             ENodeOrReg::ENode(node) => {
                                 let look = |i| self.lookup[usize::from(i)];
-                                match graph.lookup(node.clone().map_children(look)) {
+                                match graph.lookup(&node.clone().map_children(look)) {
                                     Some(id) => self.lookup.push(id),
                                     None => return,
                                 }
