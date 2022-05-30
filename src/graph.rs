@@ -73,12 +73,6 @@ impl<L: Language> Graph<L> {
     }
 
     pub fn add(&mut self, node: L) -> Id {
-        self.add_internal(node, |_, _| true)
-    }
-
-    fn add_internal<PF>(&mut self, node: L, mut push_parent: PF) -> Id 
-        where PF: FnMut(Id, Id) -> bool
-    {
         if let Some(existing_id) = self.lookup(&node) {
             existing_id
         } else {
@@ -89,13 +83,11 @@ impl<L: Language> Graph<L> {
             assert!(self.memo.insert(node.clone(), id).is_none());
 
             node.for_each(|c| {
-                if push_parent(c, id) {
-                    let parents = &mut self.nodes.get_mut(&c)
-                        .unwrap_or_else(|| panic!("Invalid child id"))
-                        .parents;
-                    parents.push(id);
-                    // TODO: dedup?
-                }
+                let parents = &mut self.nodes.get_mut(&c)
+                    .unwrap_or_else(|| panic!("Invalid child id"))
+                    .parents;
+                parents.push(id);
+                // TODO: dedup?
             });
 
             id
@@ -115,9 +107,16 @@ impl<L: Language> Graph<L> {
 
     // replace original with the given pattern instantiation
     pub fn replace(&mut self, original: Id, ast: &PatternAst<L>, subst: &Subst) {
-        // 0. create original backup for replacement
-        let original_backup = self.next_id();
-        let mut original_backup_parents = Vec::new();
+        // 0. replace original with dummy
+        let replacement_dummy = self.next_id();
+        let mut ori_n = self.nodes.remove(&original)
+            .unwrap_or_else(|| panic!("Invalid id"));
+        let replacement_dummy_parents = &mut Vec::with_capacity(ori_n.parents.len());
+        self.move_parents(&mut ori_n.parents, original,
+                          replacement_dummy_parents, replacement_dummy);
+        assert!(self.nodes.insert(original, ori_n).is_none());
+
+        // println!("replacement dummy: {:?}", self);
 
         // 1. create replacement
         let ast = ast.as_ref();
@@ -127,48 +126,58 @@ impl<L: Language> Graph<L> {
                 ENodeOrVar::Var(w) => subst[*w],
                 ENodeOrVar::ENode(e) => {
                     let n = e.clone().map_children(|c| ids[usize::from(c)]);
-                    self.add_internal(n, |child, id| {
-                        let is_dummy = child == original;
-                        if is_dummy { 
-                            original_backup_parents.push(id);
-                        }
-                        !is_dummy
-                    })
+                    self.add(n)
                 }
             };
-            let id = if id == original { original_backup } else { id };
             ids[i] = id;
         }
         let replacement = *ids.last().unwrap();
 
-        if original_backup == replacement {
+        // println!("replacement constructed: {:?}", self);
+
+        if original == replacement {
             println!("WARNING: weird rule?");
             return
         }
 
-        // 2. link original parents to replacement
-        let ori_n = self.nodes.remove(&original)
+        // 2. replace dummy with replacement
+        let mut rep_n = self.nodes.remove(&replacement)
             .unwrap_or_else(|| panic!("Invalid id"));
-        self.move_parents(&ori_n.parents[..], original, replacement);
+        self.move_parents(replacement_dummy_parents, replacement_dummy,
+                          &mut rep_n.parents, replacement);
+        assert!(self.nodes.insert(replacement, rep_n).is_none());
 
-        // 3. link original backup parents to original
-        self.move_parents(&original_backup_parents[..], original_backup, original);
-        assert!(self.nodes.insert(original, Node {
-            n: ori_n.n, parents: original_backup_parents
-        }).is_none());
+        println!("replacement inserted: {:?}", self);
+
+        // 3. restore hash-consing invariant broken by dummy
+        let find = self.merge_upwards(vec![replacement]);
+
+        println!("merged upwards: {:?}", self);
 
         // 4. collect garbage
-        self.may_remove(original);
+        self.may_remove(*find.get(&original).unwrap_or(&original));
+
+        println!("garbage collected: {:?}", self);
+
+        debug_assert!(self.check());
     }
 
-    fn move_parents(&mut self, parents: &[Id], of: Id, to: Id) {
-        for &p in parents {
+    fn move_parents(&mut self,
+        parents_of: &mut Vec<Id>, of: Id, 
+        parents_to: &mut Vec<Id>, to: Id
+    ) {
+        for p in parents_of.drain(..) {
             let n = &mut self.nodes.get_mut(&p).unwrap().n;
+            let n_bak = n.clone();
             assert!(self.memo.remove(n) == Some(p));
             n.for_each_mut(|pc| {
                 if *pc == of { *pc = to }
             });
+            println!("moving parents, {:?}: {:?} --> {:?}", p, n_bak, n);
+            // NOTE: this may trigger memo conflict, requiring upward merge afterwards
+            // (if insert returns None)
             self.memo.insert(n.clone(), p);
+            parents_to.push(p);
         }
         for r in &mut self.roots[..] {
             if *r == of { *r = to }
@@ -180,15 +189,158 @@ impl<L: Language> Graph<L> {
             .unwrap_or_else(|| panic!("Invalid id"));
         if n.parents.is_empty() && !self.roots.contains(&id) {
             let nn = n.n.clone();
+            println!("removed {:?}, {:?}", id, nn);
             self.nodes.remove(&id);
             self.memo.remove(&nn);
             nn.for_each(|c| {
-                let cps = &mut self.nodes.get_mut(&c).unwrap().parents;
-                let index = cps.iter().position(|x| *x == id).unwrap();
-                cps.remove(index);
+                self.remove_parent_from_child(id, c);
                 self.may_remove(c)
             });
         }
+    }
+
+    fn remove_parent_from_child(&mut self, parent: Id, child: Id) {
+        let parents = &mut self.nodes.get_mut(&child).unwrap().parents;
+        print!("removing parent {:?} of {:?}, {:?}", parent, child, parents);
+        let index = parents.iter().position(|x| *x == parent).unwrap();
+        parents.remove(index);
+        println!("--> {:?}", parents);
+
+    }
+
+    fn merge_upwards(&mut self, mut pending: Vec<Id>) -> HashMap<Id, Id> {
+        // TODO: maybe the code can be simplified
+        // step 1. is only necessary for parents of canonicalized nodes
+        // step 2. is only necessary for nodes requiring canonicalization 
+        let mut canonicalized = HashMap::default();
+
+        while let Some(id) = pending.pop() {
+            println!("{:?}", id);
+            let mut node = self.nodes.remove(&id).unwrap();
+            println!("merge {:?} / {:?} upwards", id, node);
+
+            // 1. update node children
+            let mut changed = false;
+            let node_bak = node.n.clone();
+            node.n.for_each_mut(|c| {
+                if let Some(c2) = canonicalized.get(c) {
+                    changed = true;
+                    *c = *c2;
+                }
+            });
+            if changed {
+                println!("changed");
+                assert!(self.memo.remove(&node_bak) == Some(id));
+                self.memo.insert(node.n.clone(), id);
+            }
+
+            // 2. update node parents
+            for p in &node.parents {
+                let pnode = self[*p].clone();
+                let pmemo = self.memo[&pnode];
+
+                if *p != pmemo {
+                    canonicalized.insert(*p, pmemo);
+
+                    let pnode = self.nodes.get_mut(p).unwrap();
+                    let pnode_parents = std::mem::replace(&mut pnode.parents, Vec::new());
+                    pending.extend(pnode_parents.iter());
+                    self.nodes.get_mut(&pmemo).unwrap().parents.extend(pnode_parents.iter());
+                }
+            }
+            
+            println!("--> {:?}", node);
+            assert!(self.nodes.insert(id, node).is_none());
+        }
+
+        println!("canonicalized {:?}", canonicalized);
+        for (id, _) in &canonicalized {
+            let node = self.nodes.remove(id).unwrap();
+            node.n.for_each(|c| self.remove_parent_from_child(*id, c));
+        }
+
+        canonicalized
+    }
+
+    fn check(&self) -> bool {
+        self.check_memo() && self.check_parents()
+    }
+
+    fn check_memo(&self) -> bool {
+        println!("{:?}", self);
+        assert!(self.nodes.len() == self.memo.len());
+
+        for (id, node) in &self.nodes {
+            assert!(self.memo.get(&node.n) == Some(id));
+        }
+
+        true
+    }
+
+    fn check_parents(&self) -> bool {
+        let mut parents = HashMap::default();
+
+        for (&id, node) in &self.nodes {
+            node.n.for_each(|child| {
+                let v = parents.entry(child).or_insert_with(|| Vec::new());
+                v.push(id);
+            });
+        }
+
+        for (&id, node) in &self.nodes {
+            let v = parents.entry(id).or_insert_with(|| Vec::new());
+            v.sort();
+            let mut v2 = node.parents.clone();
+            v2.sort();
+            assert_eq!(v, &mut v2);
+        }
+
+        true
+    }
+
+    pub fn as_egraph(&self) -> EGraph<L, ()> {
+        let mut topo = Vec::with_capacity(self.nodes().len());
+        let mut visited = HashSet::default();
+        // with_capacity(self.nodes().len());
+        
+        fn visit<L: Language>(
+            id: &Id,
+            topo: &mut Vec<(Id, L)>,
+            visited: &mut HashSet<Id>,
+            g: &Graph<L>,
+        ) {
+            if !visited.contains(id) {
+                visited.insert(*id);
+
+                let node = &g[*id];
+                node.for_each(|c| visit(&c, topo, visited, g));
+                topo.push((*id, node.clone()));
+            }
+        }
+
+        for (id, _) in self.nodes() {
+            visit(id, &mut topo, &mut visited, self);
+        }
+
+        assert!(topo.len() == self.nodes.len());
+
+        let mut added = HashMap::default();
+        // with_capacity(topo.len());
+        let mut eg = EGraph::default();
+        for (id, n) in topo.drain(..) {
+            let enode = n.clone().map_children(|c| added[&c]);
+            added.insert(id, eg.add(enode));
+        }
+
+        assert!(eg.number_of_classes() == self.nodes.len());
+
+        eg
+    }
+}
+
+impl<L: Language + std::fmt::Display> Graph<L> {
+    pub fn to_svg(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.as_egraph().dot().to_svg(path)
     }
 }
 
@@ -252,6 +404,7 @@ mod tests {
         let mut g = Graph::from_dfg(&dfg, roots);
 
         println!("{:?}", g);
+        // g.to_svg("/tmp/g1.svg").unwrap();
 
         let lhs = "(+ ?x 0)".parse::<Pattern<S>>().unwrap();
         let rhs = "?x".parse::<Pattern<S>>().unwrap();
@@ -263,8 +416,32 @@ mod tests {
         g.replace(id, &rhs.ast, &subst);
 
         println!("{:?}", g);
+        // g.to_svg("/tmp/g2.svg").unwrap();
         assert!(g.nodes().len() == 3);
     }
-}
 
-// TODO: a --> a + 0 [a + 0 --> (a + 0) + 0]
+    #[test]
+    fn triple_add0() {
+        for expr in ["(+ (+ (+ a 0) 0) 0)", "(+ (+ a 0) (+ 0 0))"] {
+            let dfg = expr.parse::<RecExpr<S>>().unwrap();
+            let roots = vec![Id::from(dfg.as_ref().len() - 1)];
+            let mut g = Graph::from_dfg(&dfg, roots);
+    
+            println!("{:?}", g);
+    
+            let lhs = "(+ ?x 0)".parse::<Pattern<S>>().unwrap();
+            let rhs = "?x".parse::<Pattern<S>>().unwrap();
+    
+            let mut counter = 0;
+            while let Some((id, subst)) = lhs.search_graph(&g) {
+                println!("{:?}: {:?}", id, subst);
+                g.replace(id, &rhs.ast, &subst);
+                counter += 1;
+            }
+    
+            assert!(counter == 3);
+            println!("{:?}", g);
+            assert!(g.nodes().len() == 1);
+        }
+    }
+}
