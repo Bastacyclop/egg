@@ -152,6 +152,11 @@ where
         None
     }
 
+    /// For patterns, return a reference to the pattern
+    fn get_pattern(&self) -> Option<&Pattern<L>> {
+        None
+    }
+
     /// Returns a list of the variables bound by this Searcher
     fn vars(&self) -> Vec<Var>;
 }

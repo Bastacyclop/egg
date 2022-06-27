@@ -277,6 +277,10 @@ pub struct SearchMatches<'a, L: Language> {
 impl<L: Language, A: Analysis<L>> Searcher<L, A> for Pattern<L> {
     fn get_pattern_ast(&self) -> Option<&PatternAst<L>> {
         Some(&self.ast)
+    }  
+    
+    fn get_pattern(&self) -> Option<&Pattern<L>> {
+        Some(&self)
     }
 
     fn search(&self, egraph: &EGraph<L, A>) -> Vec<SearchMatches<L>> {
