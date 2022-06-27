@@ -16,6 +16,21 @@ pub struct Node<L: Language> {
     pub(crate) parents: Vec<Id>,
 }
 
+/// A cost function to be used on a [`Graph`].
+pub trait GraphCostFunction<L: Language> {
+    /// Returns the cost of the given e-node.
+    ///
+    /// TODO?: This function may look at other parts of the graph to compute
+    /// the cost of the given e-node.
+    fn node_cost(&mut self, enode: &L) -> f64;
+}
+
+impl<L: Language> GraphCostFunction<L> for AstSize {
+    fn node_cost(&mut self, _enode: &L) -> f64 {
+        1.0
+    }
+}
+
 impl<L: Language> Default for Graph<L> {
     fn default() -> Self {
         Graph {
@@ -348,6 +363,10 @@ impl<L: Language> Graph<L> {
         assert!(eg.number_of_classes() == self.nodes.len());
         eg
     }
+
+    pub fn cost(&self, mut cf: impl GraphCostFunction<L>) -> f64 {
+        self.nodes.values().map(|n| cf.node_cost(&n.n)).sum()
+    }
 }
 
 impl<L: Language + std::fmt::Display> Graph<L> {
@@ -371,6 +390,7 @@ mod tests {
         g.add_root(p);
 
         println!("{:?}", g);
+        assert!(g.cost(AstSize) == 2.0);
 
         assert!(x == Id::from(0));
         assert!(x2 == x);
@@ -397,6 +417,7 @@ mod tests {
         g.replace(p, &replacement, &subst);
         
         println!("{:?}", g);
+        assert!(g.cost(AstSize) == 3.0);
 
         assert!(g.memo.get(&S::new("+", vec![x, x2])) == None);
         assert!(g.memo.len() == 3);
@@ -416,6 +437,7 @@ mod tests {
         let mut g = Graph::from_dfg(&dfg, roots);
 
         println!("{:?}", g);
+        assert!(g.cost(AstSize) == 6.0);
         // g.to_svg("/tmp/g1.svg").unwrap();
 
         let lhs = "(+ ?x 0)".parse::<Pattern<S>>().unwrap();
@@ -426,6 +448,7 @@ mod tests {
 
         println!("replace");
         g.replace(id, &rhs.ast, &subst);
+        assert!(g.cost(AstSize) == 3.0);
 
         println!("{:?}", g);
         // g.to_svg("/tmp/g2.svg").unwrap();
@@ -440,6 +463,7 @@ mod tests {
             let mut g = Graph::from_dfg(&dfg, roots);
     
             println!("{:?}", g);
+            assert!(g.cost(AstSize) == 5.0);
             // g.to_svg("/tmp/g0.svg").unwrap();
     
             let lhs = "(+ ?x 0)".parse::<Pattern<S>>().unwrap();
@@ -455,6 +479,7 @@ mod tests {
     
             assert!(counter == 3);
             println!("{:?}", g);
+            assert!(g.cost(AstSize) == 1.0);
             assert!(g.nodes().len() == 1);
             assert!(g.roots == g.nodes().map(|(&id, _)| id).collect::<Vec<_>>());
         }
