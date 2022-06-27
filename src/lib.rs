@@ -88,7 +88,7 @@ pub(crate) use {explain::Explain, explain::Justification, unionfind::UnionFind};
 pub use {
     dot::Dot,
     eclass::EClass,
-    graph::Graph,
+    graph::{Graph, GraphCostFunction},
     egraph::EGraph,
     explain::{Explanation, FlatExplanation, FlatTerm, TreeExplanation, TreeTerm},
     extract::*,
