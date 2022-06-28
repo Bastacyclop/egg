@@ -162,19 +162,19 @@ impl<L: Language> Graph<L> {
                           &mut rep_n.parents, replacement);
         assert!(self.nodes.insert(replacement, rep_n).is_none());
 
-        println!("replacement inserted: {:?}", self);
+        // println!("replacement inserted: {:?}", self);
 
         // 3. restore hash-consing invariant broken by dummy
         let canonicalized = self.merge_upwards(vec![replacement]);
 
-        println!("merged upwards: {:?}", self);
+        // println!("merged upwards: {:?}", self);
 
         // 4. collect garbage
         if canonicalized.get(&original).is_none() {
             self.may_remove(original);
         }
 
-        println!("garbage collected: {:?}", self);
+        // println!("garbage collected: {:?}", self);
 
         debug_assert!(self.check());
     }
@@ -190,7 +190,7 @@ impl<L: Language> Graph<L> {
             n.for_each_mut(|pc| {
                 if *pc == of { *pc = to }
             });
-            println!("moving parents, {:?}: {:?} --> {:?}", p, n_bak, n);
+            // println!("moving parents, {:?}: {:?} --> {:?}", p, n_bak, n);
             // NOTE: this may trigger memo conflict, requiring upward merge afterwards
             // (if insert returns None)
             self.memo.insert(n.clone(), p);
@@ -206,7 +206,7 @@ impl<L: Language> Graph<L> {
             .unwrap_or_else(|| panic!("Invalid id"));
         if n.parents.is_empty() && !self.roots.contains(&id) {
             let nn = n.n.clone();
-            println!("removed {:?}, {:?}", id, nn);
+            // println!("removed {:?}, {:?}", id, nn);
             self.nodes.remove(&id);
             self.memo.remove(&nn);
             nn.for_each(|c| {
@@ -221,7 +221,7 @@ impl<L: Language> Graph<L> {
         print!("removing parent {:?} of {:?}, {:?}", parent, child, parents);
         let index = parents.iter().position(|x| *x == parent).unwrap();
         parents.remove(index);
-        println!("--> {:?}", parents);
+        // println!("--> {:?}", parents);
 
     }
 
@@ -232,9 +232,9 @@ impl<L: Language> Graph<L> {
         let mut canonicalized = HashMap::default();
 
         while let Some(id) = pending.pop() {
-            println!("{:?}", id);
+            // println!("{:?}", id);
             let mut node = self.nodes.remove(&id).unwrap();
-            println!("merge {:?} / {:?} upwards", id, node);
+            // println!("merge {:?} / {:?} upwards", id, node);
 
             // 1. update node children
             let mut changed = false;
@@ -246,7 +246,7 @@ impl<L: Language> Graph<L> {
                 }
             });
             if changed {
-                println!("changed");
+                // println!("changed");
                 assert!(self.memo.remove(&node_bak) == Some(id));
                 self.memo.insert(node.n.clone(), id);
             }
@@ -266,11 +266,11 @@ impl<L: Language> Graph<L> {
                 }
             }
             
-            println!("--> {:?}", node);
+            // println!("--> {:?}", node);
             assert!(self.nodes.insert(id, node).is_none());
         }
 
-        println!("canonicalized {:?}", canonicalized);
+        // println!("canonicalized {:?}", canonicalized);
         for (id, _) in &canonicalized {
             let node = self.nodes.remove(id).unwrap();
             node.n.for_each(|c| self.remove_parent_from_child(*id, c));
@@ -284,7 +284,7 @@ impl<L: Language> Graph<L> {
     }
 
     fn check_memo(&self) -> bool {
-        println!("{:?}", self);
+        // println!("{:?}", self);
         assert!(self.nodes.len() == self.memo.len());
 
         for (id, node) in &self.nodes {
@@ -389,7 +389,7 @@ mod tests {
 
         g.add_root(p);
 
-        println!("{:?}", g);
+        // println!("{:?}", g);
         assert!(g.cost(AstSize) == 2.0);
 
         assert!(x == Id::from(0));
