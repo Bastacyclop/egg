@@ -218,7 +218,7 @@ impl<L: Language> Graph<L> {
 
     fn remove_parent_from_child(&mut self, parent: Id, child: Id) {
         let parents = &mut self.nodes.get_mut(&child).unwrap().parents;
-        print!("removing parent {:?} of {:?}, {:?}", parent, child, parents);
+        // print!("removing parent {:?} of {:?}, {:?}", parent, child, parents);
         let index = parents.iter().position(|x| *x == parent).unwrap();
         parents.remove(index);
         // println!("--> {:?}", parents);
