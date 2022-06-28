@@ -256,7 +256,7 @@ impl<L: Language> Pattern<L> {
         None
     }
 
-    pub fn search_graph_until(&self, g: &Graph<L>, mut f: impl FnMut(Id, Subst) -> bool) {
+    pub fn search_graph_until<T>(&self, g: &Graph<L>, mut f: impl FnMut(Id, Subst) -> Option<T>) -> Option<T> {
         // TODO? could maintain nodes by op
         for (&id, _) in g.nodes() {
             let mut substs = self.program.run_graph(g, id);
@@ -264,11 +264,13 @@ impl<L: Language> Pattern<L> {
                 if !substs.is_empty() {
                     println!("multiple hits");
                 }
-                if f(id, subst) {
-                    return;
+                if let Some(t) = f(id, subst) {
+                    return Some(t);
                 }
             }
         }
+
+        None
     }
 }
 
