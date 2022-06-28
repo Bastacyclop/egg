@@ -255,6 +255,21 @@ impl<L: Language> Pattern<L> {
 
         None
     }
+
+    pub fn search_graph_until(&self, g: &Graph<L>, mut f: impl FnMut(Id, Subst) -> bool) {
+        // TODO? could maintain nodes by op
+        for (&id, _) in g.nodes() {
+            let mut substs = self.program.run_graph(g, id);
+            if let Some(subst) = substs.pop() {
+                if !substs.is_empty() {
+                    println!("multiple hits");
+                }
+                if f(id, subst) {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 /// The result of searching a [`Searcher`] over one eclass.
