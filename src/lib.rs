@@ -102,6 +102,9 @@ pub use {
     util::*,
 };
 
+#[deprecated(note="should not be exposed by the egg library")] 
+pub use machine::for_each_matching_node;
+
 #[cfg(feature = "lp")]
 pub use lp_extract::*;
 

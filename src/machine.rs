@@ -34,7 +34,7 @@ enum ENodeOrReg<L> {
 }
 
 #[inline(always)]
-#[deprecated(note="should not be exposed by the egg library")]
+// TODO: should not be pub
 pub fn for_each_matching_node<L, D>(
     eclass: &EClass<L, D>,
     node: &L,
