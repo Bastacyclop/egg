@@ -34,7 +34,8 @@ enum ENodeOrReg<L> {
 }
 
 #[inline(always)]
-fn for_each_matching_node<L, D>(
+#[deprecated(note="should not be exposed by the egg library")]
+pub fn for_each_matching_node<L, D>(
     eclass: &EClass<L, D>,
     node: &L,
     mut f: impl FnMut(&L) -> Result,

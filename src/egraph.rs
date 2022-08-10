@@ -123,6 +123,12 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         }
     }
 
+    #[deprecated(note="should not be exposed by the egg library")]
+    pub fn classes_matching_op(&self, enode: &L) -> Option<&HashSet<Id>> {
+        let key = std::mem::discriminant(enode);
+        self.classes_by_op.get(&key)
+    }
+
     /// Returns an iterator over the eclasses in the egraph.
     pub fn classes(&self) -> impl ExactSizeIterator<Item = &EClass<L, N::Data>> {
         self.classes.values()
