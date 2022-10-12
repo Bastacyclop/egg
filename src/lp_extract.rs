@@ -211,31 +211,72 @@ where
     L: Language,
     N: Analysis<L>,
 {
-    enum Color {
-        White,
-        Gray,
-        Black,
-    }
-    type Enter = bool;
+    let mut pending: HashMap<Id, Vec<(Id, usize)>> = HashMap::default();
 
-    let mut color: HashMap<Id, Color> = egraph.classes().map(|c| (c.id, Color::White)).collect();
-    let mut stack: Vec<(Enter, Id)> = egraph.classes().map(|c| (true, c.id)).collect();
+    let mut order: HashMap<Id, usize> = HashMap::default();
 
-    while let Some((enter, id)) = stack.pop() {
-        if enter {
-            *color.get_mut(&id).unwrap() = Color::Gray;
-            stack.push((false, id));
-            for (i, node) in egraph[id].iter().enumerate() {
-                for child in node.children() {
-                    match &color[child] {
-                        Color::White => stack.push((true, *child)),
-                        Color::Gray => f(id, i),
-                        Color::Black => (),
-                    }
-                }
+    let mut memo: HashMap<(Id, usize), bool> = HashMap::default();
+
+    let mut stack: Vec<(Id, usize)> = vec![];
+
+    for class in egraph.classes() {
+        let id = class.id;
+        for (i, node) in egraph[id].iter().enumerate() {
+            for &child in node.children() {
+                pending.entry(child).or_insert_with(Vec::new).push((id, i));
             }
-        } else {
-            *color.get_mut(&id).unwrap() = Color::Black;
+
+            if node.is_leaf() {
+                stack.push((id, i));
+            }
+        }
+    }
+
+    let mut count = 0;
+
+    while let Some((id, i)) = stack.pop() {
+        if memo.get(&(id, i)).is_some() {
+            continue;
+        }
+
+        let node = &egraph[id].nodes[i];
+        let mut update = false;
+
+        if node.is_leaf() {
+            update = true;
+        } else if node.children().iter().all(|&x| order.get(&x).is_some()) {
+            if let Some(ord) = order.get(&id) {
+                update = node.children().iter().all(|&x| order.get(&x).unwrap() < ord);
+                if !update {
+                    memo.insert((id, i), false);
+                    continue;
+                }
+            } else {
+                update = true;
+            }
+        }
+
+        if update {
+            if order.get(&id).is_none() {
+                order.insert(id, count);
+                count = count + 1;
+            }
+            memo.insert((id, i), true);
+            if let Some(mut v) = pending.remove(&id) {
+                stack.append(&mut v);
+                stack.sort();
+                stack.dedup();
+            };
+        }
+    }
+
+    for class in egraph.classes() {
+        let id = class.id;
+        for (i, node) in egraph[id].iter().enumerate() {
+            if let Some(true) = memo.get(&(id, i)) {
+                continue;
+            }
+            f(id, i);
         }
     }
 }
