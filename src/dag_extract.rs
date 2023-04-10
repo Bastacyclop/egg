@@ -4,8 +4,13 @@ use std::fmt::Debug;
 use std::collections::BTreeSet;
 
 /// A cost function to be used by a [`DagExtractor`].
+///
+/// `Cost` and its operations must define an ordered commutative monoid.
 pub trait DagCostFunction<L: Language> {
-    type Cost: PartialOrd + Debug + Clone;
+    type Cost: PartialOrd + Debug + Clone + std::ops::AddAssign;
+
+    /// Returns the zero of Cost.
+    fn zero(&mut self) -> Self::Cost;
 
     /// Returns the cost of the given e-node.
     ///
@@ -16,9 +21,8 @@ pub trait DagCostFunction<L: Language> {
 impl<L: Language> DagCostFunction<L> for AstSize {
     type Cost = usize;
 
-    fn node_cost(&mut self,  _enode: &L) -> Self::Cost {
-        1
-    }
+    fn zero(&mut self) -> Self::Cost { 0 }
+    fn node_cost(&mut self,  _enode: &L) -> Self::Cost { 1 }
 }
 
 #[derive(Debug)]
@@ -111,7 +115,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
             let mut dependencies = vec![];
             let children = enode.children();
-            Self::collect_dependencies(&mut dependencies, &self.bests, eclass, &enode, &mut analysis_pending, children, children.iter().cloned().collect());
+            Self::collect_dependencies(&mut dependencies, &self.bests, children, children.iter().cloned().collect());
 
             let mut needs_update = false;
             for d in dependencies {
@@ -131,9 +135,6 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
   fn collect_dependencies(
     dependencies: &mut Vec<BTreeSet<Id>>,
     bests: &HashMap<Id, HashMap<BTreeSet<Id>, L>>,
-    eclass: &EClass<L, A::Data>,
-    enode: &L,
-    analysis_pending: &mut HashSetQueuePop::<(L, Id)>,
     remaining_children: &[Id],
     dependencies_so_far: BTreeSet<Id>,
   ) {
@@ -146,7 +147,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
             // + avoid redundant entries between children?
             for (child_dependencies, _) in &bests[child] {
                 Self::collect_dependencies(
-                    dependencies, bests, eclass, enode, analysis_pending,
+                    dependencies, bests,
                     remaining,
                     &dependencies_so_far | child_dependencies,
                 )
@@ -165,6 +166,53 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
         let u_id = egraph.find(*id);
         (u_n, u_id)
     }));
+  }
+
+  fn find_best(&mut self, eclasses: &[Id]) -> (CF::Cost, RecExpr<L>, Vec<Id>) {
+    let mut dependencies = vec![];
+    Self::collect_dependencies(&mut dependencies, &self.bests, eclasses, eclasses.iter().cloned().collect());
+
+    let mut solutions = vec![];
+    for d in &dependencies {
+        solutions.push(self.find_best_with_dependencies(d));
+    }
+    match solutions.into_iter().min_by(|(ca, _, _), (cb, _, _)| ca.partial_cmp(cb).unwrap()) {
+        None => panic!(""),
+        Some((cost, expr, to_expr)) => (cost, expr, eclasses.iter().map(|id| to_expr[id]).collect())
+    }
+  }
+
+  fn find_best_with_dependencies(&mut self, dependencies: &BTreeSet<Id>) -> (CF::Cost, RecExpr<L>, HashMap<Id, Id>) {
+    let mut cost = self.cost_f.zero();
+    let mut expr = RecExpr::default();
+    let mut to_expr = HashMap::<Id, Id>::default();
+    while to_expr.len() < dependencies.len() {
+        let mut changed = false;
+        for d in dependencies {
+            if !to_expr.contains_key(d) {
+                let available_nodes_with_cost = self.egraph[*d].nodes.iter()
+                    .filter(|n| n.all(|id| dependencies.contains(&id)))
+                    .map(|n| (self.cost_f.node_cost(n), n))
+                    .collect::<Vec<_>>();
+                match available_nodes_with_cost.iter().min_by(|(ca, _), (cb, _)| ca.partial_cmp(cb).unwrap()).map(|(c, _)| c).cloned() {
+                    None => {}
+                    Some(best_cost) => {
+                        let constructible_best_node = available_nodes_with_cost.into_iter()
+                            .filter(|(c, n)| c == &best_cost && n.all(|id| to_expr.contains_key(&id)))
+                            .next();
+                        if let Some((_, best_node)) = constructible_best_node {
+                            cost += best_cost.clone();
+                            let new_id = expr.add(best_node.clone().map_children(|id| to_expr[&id]));
+                            to_expr.insert(*d, new_id);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(changed);
+    }
+    (cost, expr, to_expr)
   }
 }
 
@@ -221,19 +269,17 @@ mod tests {
         egraph.rebuild();
 
         let mut ext = DagExtractor::new(&egraph, AstSize);
-        for (k, v) in ext.bests {
+        for (k, v) in &ext.bests {
             println!("e-class {:?}: {:?}", k, v);
         }
-        panic!("WIP");
 
-        /*
-        let mut ext = LpExtractor::new(&egraph, AstSize);
-        ext.timeout(10.0); // way too much time
-        let (exp, ids) = ext.solve_multiple(&[f, g]);
-        println!("{:?}", exp);
-        println!("{}", exp);
-        assert_eq!(exp.as_ref().len(), 4);
+        let (cost, expr, ids) = ext.find_best(&[f, g]);
+        println!("best cost: {:?}", cost);
+        println!("best expr: {:?}", expr);
+        println!("root ids: {:?}", ids);
+        assert_eq!(expr.as_ref().len(), 4);
         assert_eq!(ids.len(), 2);
-        */
+
+        panic!("WIP");
     }
 }
