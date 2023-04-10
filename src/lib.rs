@@ -43,6 +43,7 @@ mod extract;
 mod language;
 #[cfg(feature = "lp")]
 mod lp_extract;
+mod dag_extract;
 mod machine;
 mod multipattern;
 mod pattern;
