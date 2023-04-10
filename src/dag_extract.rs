@@ -282,4 +282,70 @@ mod tests {
 
         panic!("WIP");
     }
+
+    // example from issue #207
+    #[test]
+    fn dag_extract_207() {
+        let mut egraph = EGraph::<SymbolLang, ()>::default();
+
+        let g = egraph.add_expr(&"(g v x)".parse().unwrap());
+        let v = egraph.add_expr(&"v".parse().unwrap());
+        let f = egraph.add(SymbolLang::new("f", vec![v, g]));
+        let top = egraph.add(SymbolLang::new("list", vec![f, g]));
+        egraph.rebuild();
+
+        let runner = Runner::default()
+            .with_iter_limit(100)
+            .with_node_limit(10_000)
+            .with_egraph(egraph)
+            .run(&vec![rewrite!("f"; "(f ?v (g ?v ?a))" => "?a")]);
+        // runner.egraph.dot().to_dot("tmp.dot").unwrap();
+
+        let (cost, expr, ids) = DagExtractor::new(&runner.egraph, AstSize).find_best(&[top]);
+        // println!("{:?}", result);
+        assert_eq!(cost, 4);
+        assert_eq!(expr.as_ref().len(), 4);
+        // TODO: check expr is list x (g v x)
+        assert_eq!(ids, vec![3]);
+    }
+
+    #[test]
+    fn dag_extract_207_bis() {
+        struct CostFn;
+
+        impl DagCostFunction<SymbolLang> for CostFn {
+            type Cost = f64;
+        
+            fn zero(&mut self) -> Self::Cost { 0.0 }
+            fn node_cost(&mut self, enode: &SymbolLang) -> Self::Cost {
+                match enode.op.as_str() {
+                    "A" => 1.0,
+                    "B" => 2.0,
+                    "x" => 10.0,
+                    "y" => 3.0,
+                    _ => 0.1,
+                }
+            }
+        }
+
+        let mut egraph = EGraph::<SymbolLang, ()>::default();
+
+        let a = egraph.add_expr(&"(A y)".parse().unwrap());
+        let x = egraph.add_expr(&"x".parse().unwrap());
+        let y = egraph.add_expr(&"y".parse().unwrap());
+        let top = egraph.add(SymbolLang::new("list", vec![a, y]));
+        egraph.union(a, x);
+        egraph.rebuild();
+        egraph.dot().to_dot("tmp1.dot").unwrap();
+        // correcly finds (list (A y) y); instead of (list x y) from issue
+        println!("{:?}", DagExtractor::new(&egraph, CostFn).find_best(&[top]));
+
+        let b = egraph.add_expr(&"(B x)".parse().unwrap());
+        egraph.union(b, y);
+        egraph.rebuild();
+        egraph.dot().to_dot("tmp2.dot").unwrap();
+        println!("{:?}", DagExtractor::new(&egraph, CostFn).find_best(&[top])); // issue: (list x (B x)) while (list (A y) y) is optimal ?
+
+        panic!("");
+    }
 }
