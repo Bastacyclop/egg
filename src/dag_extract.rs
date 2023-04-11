@@ -40,7 +40,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
     where L: Language, A: Analysis<L>, CF: DagCostFunction<L>,
           L: 'a, A: 'a, CF::Cost: 'a
 {
-  fn new(egraph: &'a EGraph<L, A>, cost_f: CF) -> Self {
+  pub fn new(egraph: &'a EGraph<L, A>, cost_f: CF) -> Self {
     let bests = HashMap::default();
     let mut extractor = DagExtractor {
         cost_f,
@@ -172,7 +172,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
     }));
   }
 
-  fn find_best(&mut self, eclasses: &[Id]) -> (CF::Cost, RecExpr<L>, Vec<Id>) {
+  pub fn find_best(&mut self, eclasses: &[Id]) -> (CF::Cost, RecExpr<L>, Vec<Id>) {
     let mut dependencies = vec![];
     Self::collect_dependencies(&mut dependencies, &self.bests, eclasses, eclasses.iter().cloned().collect());
 
@@ -247,26 +247,26 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
 /// --- egg-sketches analysis.rs
 
-pub struct HashSetQueuePop<T> {
+pub(crate) struct HashSetQueuePop<T> {
     map: HashSet<T>,
     queue: std::collections::VecDeque<T>,
 }
 
 impl<T: Eq + std::hash::Hash + Clone> HashSetQueuePop<T> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         HashSetQueuePop {
             map: HashSet::default(),
             queue: std::collections::VecDeque::new(),
         }
     }
 
-    pub fn insert(&mut self, t: T) {
+    pub(crate) fn insert(&mut self, t: T) {
         if self.map.insert(t.clone()) {
             self.queue.push_back(t);
         }
     }
 
-    pub fn extend<I>(&mut self, iter: I)
+    pub(crate) fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = T>,
     {
@@ -275,7 +275,7 @@ impl<T: Eq + std::hash::Hash + Clone> HashSetQueuePop<T> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    pub(crate) fn pop(&mut self) -> Option<T> {
         let res = self.queue.pop_front();
         res.as_ref().map(|t| self.map.remove(t));
         res
