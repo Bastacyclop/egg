@@ -48,6 +48,10 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
         egraph
     };
     extractor.find_costs();
+    /* DEBUG:
+    for (k, v) in &extractor.bests {
+        println!("e-class {:?}: {:?}", k, v);
+    } */
 
     extractor
   }
@@ -183,16 +187,19 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
   }
 
   fn find_best_with_dependencies(&mut self, dependencies: &BTreeSet<Id>) -> (CF::Cost, RecExpr<L>, HashMap<Id, Id>) {
-    let mut cost = self.cost_f.zero();
+    let egraph = &self.egraph;
+    let cost_f = &mut self.cost_f;
+
+    let mut cost = cost_f.zero();
     let mut expr = RecExpr::default();
     let mut to_expr = HashMap::<Id, Id>::default();
     while to_expr.len() < dependencies.len() {
         let mut changed = false;
         for d in dependencies {
             if !to_expr.contains_key(d) {
-                let available_nodes_with_cost = self.egraph[*d].nodes.iter()
+                let available_nodes_with_cost = egraph[*d].nodes.iter()
                     .filter(|n| n.all(|id| dependencies.contains(&id)))
-                    .map(|n| (self.cost_f.node_cost(n), n))
+                    .map(|n| (cost_f.node_cost(n), n))
                     .collect::<Vec<_>>();
                 match available_nodes_with_cost.iter().min_by(|(ca, _), (cb, _)| ca.partial_cmp(cb).unwrap()).map(|(c, _)| c).cloned() {
                     None => {}
@@ -210,7 +217,28 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
                 }
             }
         }
-        assert!(changed);
+        // TODO: maybe this logic can be simplified
+        if !changed {
+            // constructing a best node requires constructing other nodes that are not best:
+            // - make progress greedily with the globally cheapest constructible node
+            let constructible_best_node = dependencies.iter()
+                .filter(|d| !to_expr.contains_key(d))
+                .flat_map(|d| {
+                    egraph[*d].nodes.iter()
+                        .filter(|n| n.all(|id| to_expr.contains_key(&id)))
+                        .map(move |n| (*d, n.clone()))
+                })
+                .map(|(d, n)| (d, cost_f.node_cost(&n), n))
+                .min_by(|(_, ca, _), (_, cb, _)| ca.partial_cmp(cb).unwrap());
+            match constructible_best_node {
+                None => panic!("find_best is stuck at: {:?}", expr),
+                Some((best_d, best_cost, best_node)) => {
+                    cost += best_cost;
+                    let new_id = expr.add(best_node.map_children(|id| to_expr[&id]));
+                    to_expr.insert(best_d, new_id);
+                }
+            }
+        }
     }
     (cost, expr, to_expr)
   }
@@ -269,18 +297,13 @@ mod tests {
         egraph.rebuild();
 
         let mut ext = DagExtractor::new(&egraph, AstSize);
-        for (k, v) in &ext.bests {
-            println!("e-class {:?}: {:?}", k, v);
-        }
-
         let (cost, expr, ids) = ext.find_best(&[f, g]);
         println!("best cost: {:?}", cost);
         println!("best expr: {:?}", expr);
         println!("root ids: {:?}", ids);
+        assert_eq!(cost, 4);
         assert_eq!(expr.as_ref().len(), 4);
         assert_eq!(ids.len(), 2);
-
-        panic!("WIP");
     }
 
     // example from issue #207
@@ -306,7 +329,7 @@ mod tests {
         assert_eq!(cost, 4);
         assert_eq!(expr.as_ref().len(), 4);
         // TODO: check expr is list x (g v x)
-        assert_eq!(ids, vec![3]);
+        assert_eq!(ids, vec![Id::from(3)]);
     }
 
     #[test]
@@ -336,16 +359,21 @@ mod tests {
         let top = egraph.add(SymbolLang::new("list", vec![a, y]));
         egraph.union(a, x);
         egraph.rebuild();
-        egraph.dot().to_dot("tmp1.dot").unwrap();
+        // egraph.dot().to_dot("tmp1.dot").unwrap();
         // correcly finds (list (A y) y); instead of (list x y) from issue
-        println!("{:?}", DagExtractor::new(&egraph, CostFn).find_best(&[top]));
+        let (cost1, expr1, ids1) = DagExtractor::new(&egraph, CostFn).find_best(&[top]);
+        assert_eq!(cost1, 4.1);
+        assert_eq!(expr1.as_ref().len(), 3);
+        assert_eq!(ids1, vec![Id::from(2)]);
 
         let b = egraph.add_expr(&"(B x)".parse().unwrap());
         egraph.union(b, y);
         egraph.rebuild();
-        egraph.dot().to_dot("tmp2.dot").unwrap();
-        println!("{:?}", DagExtractor::new(&egraph, CostFn).find_best(&[top])); // issue: (list x (B x)) while (list (A y) y) is optimal ?
-
-        panic!("");
+        // egraph.dot().to_dot("tmp2.dot").unwrap();
+        // correctly finds (list (A y) y); instead of (list x (B x)) from issue
+        let (cost2, expr2, ids2) = DagExtractor::new(&egraph, CostFn).find_best(&[top]); 
+        assert_eq!(cost2, 4.1);
+        assert_eq!(expr2.as_ref().len(), 3);
+        assert_eq!(ids2, vec![Id::from(2)]);
     }
 }
