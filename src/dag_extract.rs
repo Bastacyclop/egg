@@ -90,7 +90,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
   pub fn find_best(&mut self, roots: &[Id]) -> (CF::Cost, RecExpr<L>, Vec<Id>) {
     // TODO: id for solution nodes
-    let mut bests = HashMap::<SolutionNode, (CF::Cost, Vec<L>, SolutionNode)>::default();
+    let mut bests = HashMap::<SolutionNode, (CF::Cost, L, SolutionNode)>::default();
 
     let mut heap = BinaryHeap::new();
     // TODO: avoid duplication of sets
@@ -103,7 +103,7 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
     });
 
     while let Some(State { cost, solution_node }) = heap.pop() {
-        println!("fb: {:?}, {:?}", cost, solution_node);
+        // println!("fb: {:?}, {:?}", cost, solution_node);
         // let (visited, to_visit) = solution_node;
         // We found a solution, we can stop here.
         if solution_node.1.is_empty() {
@@ -112,29 +112,20 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
         // This path is suboptimal.
         if (!solution_node.0.is_empty()) && cost > bests[&solution_node].0 {
-            println!("suboptimal");
             continue;
         }
         // TODO: what if = best?
 
-        let n_visited = &solution_node.0 | &solution_node.1;
-        for (n_cost, n_to_visit, n_nodes) in Self::next_moves(cost, solution_node.1.clone(), &self.egraph, &mut self.cost_f) {
-            println!("next move: {:?}, {:?}, {:?}",
-                n_cost, n_to_visit, n_nodes);
-            // This is a cycle.
-            if !n_visited.is_disjoint(&n_to_visit) {
-                println!("cycle");
-                continue;
-            }
+        for (n_cost, n_solution_node, n_node) in Self::next_moves(cost, &solution_node, &self.egraph, &mut self.cost_f) {
+            /* println!("next move: {:?}, {:?}, {:?}",
+                n_cost, n_solution_node, n_node); */
 
             let next = State {
                 cost: n_cost,
-                solution_node: (n_visited.clone(), n_to_visit),
-                // &n_to_visit - &n_visited = n_to_visit
+                solution_node: n_solution_node,
             };
             if bests.get(&next.solution_node).map(|sn| next.cost < sn.0).unwrap_or(true) {
-                println!("push");
-                bests.insert(next.solution_node.clone(), (next.cost.clone(), n_nodes, solution_node.clone()));
+                bests.insert(next.solution_node.clone(), (next.cost.clone(), n_node, solution_node.clone()));
                 heap.push(next);
             }
         }
@@ -145,57 +136,43 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
   fn next_moves(
     cost: CF::Cost,
-    to_visit: ToVisit,
+    solution_node: &SolutionNode,
     egraph: &EGraph<L, A>,
     cost_f: &mut CF,
-  ) -> Vec<(CF::Cost, ToVisit, Vec<L>)>
+  ) -> Vec<(CF::Cost, SolutionNode, L)>
   {
+    let (visited, to_visit) = solution_node;
     let mut result = Vec::new();
-    let remaining: Vec<Id> = to_visit.into_iter().collect();
-    let mut nodes_so_far = Vec::new();
-    Self::next_moves_rec(&remaining[..], egraph, cost_f, cost, &mut nodes_so_far, ToVisit::default(), &mut result);
-    result
-  }
+    for &tv in to_visit {
+        let eclass_to_visit = &egraph[tv];
+        let tv_set = BTreeSet::from([tv]);
+        let visited_plus_tv = visited | &tv_set;
+        let to_visit_minus_tv = to_visit - &tv_set;
+        for n_node in &eclass_to_visit.nodes {
+            debug_assert!(n_node.all(|c| egraph.find(c) == c));
+    
+            let children: BTreeSet<_> = n_node.children().iter().cloned().collect();
+            let no_cycle = visited_plus_tv.is_disjoint(&children);
 
-  fn next_moves_rec(
-    remaining: &[Id],
-    egraph: &EGraph<L, A>,
-    cost_f: &mut CF,
-    cost_so_far: CF::Cost,
-    nodes_so_far: &mut Vec<L>,
-    n_to_visit_so_far: ToVisit,
-    acc: &mut Vec<(CF::Cost, ToVisit, Vec<L>)>,
-  )
-  {
-    match remaining.split_first() {
-        None => acc.push((cost_so_far, n_to_visit_so_far, nodes_so_far.clone())),
-        Some((&tv, rem)) => {
-            let eclass_to_visit = &egraph[tv];
-            for possible_enode in &eclass_to_visit.nodes {
-                debug_assert!(possible_enode.all(|c| egraph.find(c) == c));
-        
-                let cost_so_far = cost_so_far.clone() + cost_f.node_cost(possible_enode);
-                nodes_so_far.push(possible_enode.clone());
-                let children: BTreeSet<_> = possible_enode.children().iter().cloned().collect();
-                let n_to_visit_so_far = &n_to_visit_so_far | &children;
-                Self::next_moves_rec(rem, egraph, cost_f, cost_so_far, nodes_so_far, n_to_visit_so_far, acc);
-                nodes_so_far.pop();
+            if no_cycle {
+                let n_cost = cost.clone() + cost_f.node_cost(n_node);
+                let n_to_visit = &to_visit_minus_tv | &children;
+                result.push((n_cost, (visited_plus_tv.clone(), n_to_visit), n_node.clone()));
             }
         }
     }
+    result
   }
 
   fn build_solution(
     cost: CF::Cost,
     visited: Visited,
-    bests: &HashMap<SolutionNode, (CF::Cost, Vec<L>, SolutionNode)>,
+    bests: &HashMap<SolutionNode, (CF::Cost, L, SolutionNode)>,
     egraph: &EGraph<L, A>,
     roots: &[Id],
   ) -> (CF::Cost, RecExpr<L>, Vec<Id>) {
-    println!("visited: {:?}", visited);
-    println!("bs: {:?}", bests);
-    // {0, 1, 3}, {}: 3.1 [B 1, A 0], {3}, {0, 1}
-    // {3}, {0, 1}: 0.1 [list 1 0], {}, {3}
+    // println!("visited: {:?}", visited);
+    println!("solution nodes explored: {:?}", bests.len());
     let solution_node = &(visited, ToVisit::default());
     debug_assert!(cost == bests[solution_node].0);
     let mut expr = RecExpr::default();
@@ -212,22 +189,17 @@ impl<'a, L, A, CF> DagExtractor<'a, L, A, CF>
 
   fn build_solution_rec(
     solution_node: &SolutionNode,
-    bests: &HashMap<SolutionNode, (CF::Cost, Vec<L>, SolutionNode)>,
+    bests: &HashMap<SolutionNode, (CF::Cost, L, SolutionNode)>,
     egraph: &EGraph<L, A>,
     expr: &mut RecExpr<L>,
     to_expr: &mut HashMap<Id, Id>,
   )
   {
-    println!("bsr");
     match bests.get(solution_node) {
         None => (),
-        Some((_, nodes, prev_solution_node)) => {
-            for n in nodes {
-                println!("to_expr: {:?}", to_expr);
-                println!("n: {:?}", n);
-                let new_id = expr.add(n.clone().map_children(|id| to_expr[&id]));
-                to_expr.insert(egraph.lookup(n.clone()).unwrap(), new_id);
-            }
+        Some((_, node, prev_solution_node)) => {
+            let new_id = expr.add(node.clone().map_children(|id| to_expr[&id]));
+            to_expr.insert(egraph.lookup(node.clone()).unwrap(), new_id);
             Self::build_solution_rec(
                 prev_solution_node,
                 bests,
