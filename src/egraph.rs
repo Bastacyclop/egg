@@ -65,7 +65,7 @@ pub struct EGraph<L: Language, N: Analysis<L>> {
     /// Nodes which need to be processed for rebuilding. The `Id` is the `Id` of the enode,
     /// not the canonical id of the eclass.
     pending: Vec<(L, Id)>,
-    analysis_pending: IndexSet<(L, Id)>,
+    analysis_pending: UniqueQueue<(L, Id)>,
     #[cfg_attr(
         feature = "serde-1",
         serde(bound(
@@ -73,7 +73,7 @@ pub struct EGraph<L: Language, N: Analysis<L>> {
             deserialize = "N::Data: for<'a> Deserialize<'a>",
         ))
     )]
-    classes: HashMap<Id, EClass<L, N::Data>>,
+    pub(crate) classes: HashMap<Id, EClass<L, N::Data>>,
     #[cfg_attr(feature = "serde-1", serde(skip))]
     #[cfg_attr(feature = "serde-1", serde(default = "default_classes_by_op"))]
     pub(crate) classes_by_op: HashMap<std::mem::Discriminant<L>, HashSet<Id>>,
@@ -190,6 +190,179 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         self
     }
 
+    /// By default, egg runs a greedy algorithm to reduce the size of resulting explanations (without complexity overhead).
+    /// Use this function to turn this algorithm off.
+    pub fn without_explanation_length_optimization(mut self) -> Self {
+        if let Some(explain) = &mut self.explain {
+            explain.optimize_explanation_lengths = false;
+            self
+        } else {
+            panic!("Need to set explanations enabled before setting length optimization.");
+        }
+    }
+
+    /// By default, egg runs a greedy algorithm to reduce the size of resulting explanations (without complexity overhead).
+    /// Use this function to turn this algorithm on again if you have turned it off.
+    pub fn with_explanation_length_optimization(mut self) -> Self {
+        if let Some(explain) = &mut self.explain {
+            explain.optimize_explanation_lengths = true;
+            self
+        } else {
+            panic!("Need to set explanations enabled before setting length optimization.");
+        }
+    }
+
+    /// Make a copy of the egraph with the same nodes, but no unions between them.
+    pub fn copy_without_unions(&self, analysis: N) -> Self {
+        if let Some(explain) = &self.explain {
+            let egraph = Self::new(analysis);
+            explain.populate_enodes(egraph)
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get a copied egraph without unions");
+        }
+    }
+
+    /// Performs the union between two egraphs.
+    pub fn egraph_union(&mut self, other: &EGraph<L, N>) {
+        let right_unions = other.get_union_equalities();
+        for (left, right, why) in right_unions {
+            self.union_instantiations(
+                &other.id_to_pattern(left, &Default::default()).0.ast,
+                &other.id_to_pattern(right, &Default::default()).0.ast,
+                &Default::default(),
+                why,
+            );
+        }
+        self.rebuild();
+    }
+
+    fn from_enodes(enodes: Vec<(L, Id)>, analysis: N) -> Self {
+        let mut egraph = Self::new(analysis);
+        let mut ids: HashMap<Id, Id> = Default::default();
+
+        loop {
+            let mut did_something = false;
+
+            for (enode, id) in &enodes {
+                let valid = enode.children().iter().all(|c| ids.contains_key(c));
+                if !valid {
+                    continue;
+                }
+
+                let mut enode = enode.clone().map_children(|c| ids[&c]);
+
+                if egraph.lookup(&mut enode).is_some() {
+                    continue;
+                }
+
+                let added = egraph.add(enode);
+                if let Some(existing) = ids.get(id) {
+                    egraph.union(*existing, added);
+                } else {
+                    ids.insert(*id, added);
+                }
+
+                did_something = true;
+            }
+
+            if !did_something {
+                break;
+            }
+        }
+
+        egraph
+    }
+
+    /// A intersection algorithm between two egraphs.
+    /// The intersection is correct for all terms that are equal in both egraphs.
+    /// Be wary, though, because terms which are not represented in both egraphs
+    /// are not captured in the intersection.
+    /// The runtime of this algorithm is O(|E1| * |E2|), where |E1| and |E2| are the number of enodes in each egraph.
+    pub fn egraph_intersect(&self, other: &EGraph<L, N>, analysis: N) -> EGraph<L, N> {
+        let mut product_map: HashMap<(Id, Id), Id> = Default::default();
+        let mut enodes = vec![];
+
+        for class1 in self.classes() {
+            for class2 in other.classes() {
+                self.intersect_classes(other, &mut enodes, class1.id, class2.id, &mut product_map);
+            }
+        }
+
+        Self::from_enodes(enodes, analysis)
+    }
+
+    fn get_product_id(class1: Id, class2: Id, product_map: &mut HashMap<(Id, Id), Id>) -> Id {
+        if let Some(id) = product_map.get(&(class1, class2)) {
+            *id
+        } else {
+            let id = Id::from(product_map.len());
+            product_map.insert((class1, class2), id);
+            id
+        }
+    }
+
+    fn intersect_classes(
+        &self,
+        other: &EGraph<L, N>,
+        res: &mut Vec<(L, Id)>,
+        class1: Id,
+        class2: Id,
+        product_map: &mut HashMap<(Id, Id), Id>,
+    ) {
+        let res_id = Self::get_product_id(class1, class2, product_map);
+        for node1 in &self.classes[&class1].nodes {
+            for node2 in &other.classes[&class2].nodes {
+                if node1.matches(node2) {
+                    let children1 = node1.children();
+                    let children2 = node2.children();
+                    let mut new_node = node1.clone();
+                    let children = new_node.children_mut();
+                    for (i, (child1, child2)) in children1.iter().zip(children2.iter()).enumerate()
+                    {
+                        let prod = Self::get_product_id(
+                            self.find(*child1),
+                            other.find(*child2),
+                            product_map,
+                        );
+                        children[i] = prod;
+                    }
+
+                    res.push((new_node, res_id));
+                }
+            }
+        }
+    }
+
+    /// Pick a representative term for a given Id.
+    pub fn id_to_expr(&self, id: Id) -> RecExpr<L> {
+        if let Some(explain) = &self.explain {
+            explain.node_to_recexpr(id)
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get unique expressions per id");
+        }
+    }
+
+    /// Like [`id_to_expr`](EGraph::id_to_expr), but creates a pattern instead of a term.
+    /// When an eclass listed in the given substitutions is found, it creates a variable.
+    /// It also adds this variable and the corresponding Id value to the resulting [`Subst`]
+    /// Otherwise it behaves like [`id_to_expr`](EGraph::id_to_expr).
+    pub fn id_to_pattern(&self, id: Id, substitutions: &HashMap<Id, Id>) -> (Pattern<L>, Subst) {
+        if let Some(explain) = &self.explain {
+            explain.node_to_pattern(id, substitutions)
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get unique patterns per id");
+        }
+    }
+
+    /// Get all the unions ever found in the egraph in terms of enode ids.
+    pub fn get_union_equalities(&self) -> UnionEqualities {
+        if let Some(explain) = &self.explain {
+            explain.get_union_equalities()
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get union equalities");
+        }
+    }
+
     /// Disable explanations for this `EGraph`.
     pub fn with_explanations_disabled(mut self) -> Self {
         self.explain = None;
@@ -201,17 +374,46 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         self.explain.is_some()
     }
 
+    /// Get the number of congruences between nodes in the egraph.
+    /// Only available when explanations are enabled.
+    pub fn get_num_congr(&mut self) -> usize {
+        if let Some(explain) = &self.explain {
+            explain.get_num_congr::<N>(&self.classes, &self.unionfind)
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get explanations.")
+        }
+    }
+
+    /// Get the number of nodes in the egraph used for explanations.
+    pub fn get_explanation_num_nodes(&mut self) -> usize {
+        if let Some(explain) = &self.explain {
+            explain.get_num_nodes()
+        } else {
+            panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get explanations.")
+        }
+    }
+
     /// When explanations are enabled, this function
     /// produces an [`Explanation`] describing why two expressions are equivalent.
     ///
     /// The [`Explanation`] can be used in it's default tree form or in a less compact
     /// flattened form. Each of these also has a s-expression string representation,
     /// given by [`get_flat_string`](Explanation::get_flat_string) and [`get_string`](Explanation::get_string).
-    pub fn explain_equivalence(&mut self, left: &RecExpr<L>, right: &RecExpr<L>) -> Explanation<L> {
-        let left = self.add_expr_internal(left);
-        let right = self.add_expr_internal(right);
+    pub fn explain_equivalence(
+        &mut self,
+        left_expr: &RecExpr<L>,
+        right_expr: &RecExpr<L>,
+    ) -> Explanation<L> {
+        let left = self.add_expr_internal(left_expr);
+        let right = self.add_expr_internal(right_expr);
+        if self.find(left) != self.find(right) {
+            panic!(
+                "Tried to explain equivalence between non-equal terms {:?} and {:?}",
+                left_expr, right_expr
+            );
+        }
         if let Some(explain) = &mut self.explain {
-            explain.explain_equivalence(left, right)
+            explain.explain_equivalence::<N>(left, right, &mut self.unionfind, &self.classes)
         } else {
             panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get explanations.")
         }
@@ -251,14 +453,21 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
     /// Get an explanation for why an expression matches a pattern.
     pub fn explain_matches(
         &mut self,
-        left: &RecExpr<L>,
-        right: &PatternAst<L>,
+        left_expr: &RecExpr<L>,
+        right_pattern: &PatternAst<L>,
         subst: &Subst,
     ) -> Explanation<L> {
-        let left = self.add_expr_internal(left);
-        let right = self.add_instantiation_internal(right, subst);
+        let left = self.add_expr_internal(left_expr);
+        let right = self.add_instantiation_internal(right_pattern, subst);
+
+        if self.find(left) != self.find(right) {
+            panic!(
+                "Tried to explain equivalence between non-equal terms {:?} and {:?}",
+                left_expr, right_pattern
+            );
+        }
         if let Some(explain) = &mut self.explain {
-            explain.explain_equivalence(left, right)
+            explain.explain_equivalence::<N>(left, right, &mut self.unionfind, &self.classes)
         } else {
             panic!("Use runner.with_explanations_enabled() or egraph.with_explanations_enabled() before running to get explanations.");
         }
@@ -385,7 +594,7 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         for node in nodes {
             match node {
                 ENodeOrVar::Var(var) => {
-                    let id = subst[*var];
+                    let id = self.find(subst[*var]);
                     new_ids.push(id);
                     new_node_q.push(false);
                 }
@@ -604,23 +813,38 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         (self.find(id1), did_union)
     }
 
+    /// Unions two e-classes, using a given reason to justify it.
+    ///
+    ///
+    /// Unlike `union_instantiations`, this function picks arbitrary representatives
+    /// from either e-class.
+    /// When possible, use [`union_instantiations`](EGraph::union_instantiations),
+    /// since that ensures that the proof rewrites between the terms you are
+    /// actually proving equivalent.
+    pub fn union_trusted(&mut self, from: Id, to: Id, reason: impl Into<Symbol>) -> bool {
+        self.perform_union(from, to, Some(Justification::Rule(reason.into())), false)
+    }
+
     /// Unions two eclasses given their ids.
     ///
     /// The given ids need not be canonical.
     /// The returned `bool` indicates whether a union is necessary,
     /// so it's `false` if they were already equivalent.
     ///
-    /// When explanations are enabled, this function is not available.
-    /// Instead, use [`union_instantiations`](EGraph::union_instantiations).
+    /// When explanations are enabled, this function behaves like [`EGraph::union_trusted`],
+    ///  and it lists the call site as the proof reason.
+    /// You should prefer [`union_instantiations`](EGraph::union_instantiations) when
+    ///  you want the proofs to always be meaningful.
     /// See [`explain_equivalence`](Runner::explain_equivalence) for a more detailed
     /// explanation of the feature.
-    ///
-    ///
+    #[track_caller]
     pub fn union(&mut self, id1: Id, id2: Id) -> bool {
         if self.explain.is_some() {
-            panic!("Use union_instantiations when explanation mode is enabled.");
+            let caller = std::panic::Location::caller();
+            self.union_trusted(id1, id2, caller.to_string())
+        } else {
+            self.perform_union(id1, id2, None, false)
         }
-        self.perform_union(id1, id2, None, false)
     }
 
     fn perform_union(
@@ -630,10 +854,17 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         rule: Option<Justification>,
         any_new_rhs: bool,
     ) -> bool {
+        N::pre_union(self, enode_id1, enode_id2, &rule);
+
         self.clean = false;
         let mut id1 = self.find_mut(enode_id1);
         let mut id2 = self.find_mut(enode_id2);
         if id1 == id2 {
+            if let Some(Justification::Rule(_)) = rule {
+                if let Some(explain) = &mut self.explain {
+                    explain.alternate_rewrite(enode_id1, enode_id2, rule.unwrap());
+                }
+            }
             return false;
         }
         // make sure class2 has fewer parents
@@ -642,8 +873,6 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
         if class1_parents < class2_parents {
             std::mem::swap(&mut id1, &mut id2);
         }
-
-        N::pre_union(self, id1, id2);
 
         if let Some(explain) = &mut self.explain {
             explain.union(enode_id1, enode_id2, rule.unwrap(), any_new_rhs);
@@ -671,6 +900,19 @@ impl<L: Language, N: Analysis<L>> EGraph<L, N> {
 
         N::modify(self, id1);
         true
+    }
+
+    /// Update the analysis data of an e-class.
+    ///
+    /// This also propagates the changes through the e-graph,
+    /// so [`Analysis::make`] and [`Analysis::merge`] will get
+    /// called for other parts of the e-graph on rebuild.
+    pub fn set_analysis_data(&mut self, id: Id, new_data: N::Data) {
+        let id = self.find_mut(id);
+        let class = self.classes.get_mut(&id).unwrap();
+        class.data = new_data;
+        self.analysis_pending.extend(class.parents.iter().cloned());
+        N::modify(self, id)
     }
 
     /// Returns a more debug-able representation of the egraph.

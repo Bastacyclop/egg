@@ -6,7 +6,7 @@ use crate::*;
 /// A set of open expressions bound to variables.
 ///
 /// Multipatterns bind many expressions to variables,
-/// allowing for simulataneous searching or application of many terms
+/// allowing for simultaneous searching or application of many terms
 /// constrained to the same substitution.
 ///
 /// Multipatterns are good for writing graph rewrites or datalog-style rules.
@@ -17,11 +17,11 @@ use crate::*;
 /// [`MultiPattern`] implements both [`Searcher`] and [`Applier`].
 /// When searching a multipattern, the result ensures that
 /// patterns bound to the same variable are equivalent.
-/// When applying a mulitpattern, patterns bound a variable occuring in the
+/// When applying a multipattern, patterns bound a variable occuring in the
 /// searcher are unioned with that e-class.
 ///
 /// Multipatterns currently do not support the explanations feature.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MultiPattern<L> {
     asts: Vec<(Var, PatternAst<L>)>,
     program: machine::Program<L>,
@@ -101,8 +101,13 @@ impl<L: Language + FromOp> FromStr for MultiPattern<L> {
 }
 
 impl<L: Language, A: Analysis<L>> Searcher<L, A> for MultiPattern<L> {
-    fn search_eclass(&self, egraph: &EGraph<L, A>, eclass: Id) -> Option<SearchMatches<L>> {
-        let substs = self.program.run(egraph, eclass);
+    fn search_eclass_with_limit(
+        &self,
+        egraph: &EGraph<L, A>,
+        eclass: Id,
+        limit: usize,
+    ) -> Option<SearchMatches<L>> {
+        let substs = self.program.run_with_limit(egraph, eclass, limit);
         if substs.is_empty() {
             None
         } else {

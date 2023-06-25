@@ -437,6 +437,20 @@ where
         self
     }
 
+    /// By default, egg runs a greedy algorithm to reduce the size of resulting explanations (without complexity overhead).
+    /// Use this function to turn this algorithm off.
+    pub fn without_explanation_length_optimization(mut self) -> Self {
+        self.egraph = self.egraph.without_explanation_length_optimization();
+        self
+    }
+
+    /// By default, egg runs a greedy algorithm to reduce the size of resulting explanations (without complexity overhead).
+    /// Use this function to turn this algorithm on again if you have turned it off.
+    pub fn with_explanation_length_optimization(mut self) -> Self {
+        self.egraph = self.egraph.with_explanation_length_optimization();
+        self
+    }
+
     /// Disable explanations for this runner's egraph.
     pub fn with_explanations_disabled(mut self) -> Self {
         self.egraph = self.egraph.with_explanations_disabled();
@@ -523,9 +537,10 @@ where
         let start_time = Instant::now();
 
         let mut matches = Vec::new();
+        let mut applied = IndexMap::default();
         result = result.and_then(|_| {
-            rules.iter().try_for_each(|rule| {
-                let ms = self.scheduler.search_rewrite(i, &self.egraph, rule);
+            rules.iter().try_for_each(|rw| {
+                let ms = self.scheduler.search_rewrite(i, &self.egraph, rw);
                 matches.push(ms);
                 self.check_limits()
             })
@@ -536,7 +551,6 @@ where
 
         let apply_time = Instant::now();
 
-        let mut applied = IndexMap::default();
         result = result.and_then(|_| {
             rules.iter().zip(matches).try_for_each(|(rw, ms)| {
                 let total_matches: usize = ms.iter().map(|m| m.substs.len()).sum();
@@ -574,8 +588,13 @@ where
 
         let can_be_saturated = applied.is_empty()
             && self.scheduler.can_stop(i)
+            // now make sure the hooks didn't do anything
             && (egraph_nodes == egraph_nodes_after_hooks)
-            && (egraph_classes == egraph_classes_after_hooks);
+            && (egraph_classes == egraph_classes_after_hooks)
+            // now make sure that conditional rules (which might add
+            // nodes without applying) didn't do anything
+            && (egraph_nodes == self.egraph.total_size())
+            && (egraph_classes == self.egraph.number_of_classes());
 
         if can_be_saturated {
             result = result.and(Err(StopReason::Saturated))
@@ -860,9 +879,12 @@ where
             return vec![];
         }
 
-        let matches = rewrite.search(egraph);
+        let threshold = stats
+            .match_limit
+            .checked_shl(stats.times_banned as u32)
+            .unwrap();
+        let matches = rewrite.search_with_limit(egraph, threshold.saturating_add(1));
         let total_len: usize = matches.iter().map(|m| m.substs.len()).sum();
-        let threshold = stats.match_limit << stats.times_banned;
         if total_len > threshold {
             let ban_length = stats.ban_length << stats.times_banned;
             stats.times_banned += 1;

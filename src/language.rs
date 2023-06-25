@@ -466,7 +466,8 @@ impl<L: Language + Display> Display for RecExpr<L> {
 }
 
 impl<L: Language + Display> RecExpr<L> {
-    fn to_sexp(&self) -> Sexp {
+    /// Convert this RecExpr into an Sexp
+    pub(crate) fn to_sexp(&self) -> Sexp {
         let last = self.nodes.len() - 1;
         if !self.is_dag() {
             log::warn!("Tried to print a non-dag: {:?}", self.nodes);
@@ -583,11 +584,14 @@ impl<L: FromOp> FromStr for RecExpr<L> {
 /// Result of [`Analysis::merge`] indicating which of the inputs
 /// are different from the merged result.
 ///
-/// The fields correspond to whether the `a` and `b` inputs to [`Analysis::merge`]
-/// were changed in any way by the merge.
+/// The fields correspond to whether the initial `a` and `b` inputs to [`Analysis::merge`]
+/// were different from the final merged value.
 ///
 /// In both cases the result may be conservative -- they may indicate `true` even
 /// when there is no difference between the input and the result.
+///
+/// `DidMerge`s can be "or"ed together using the `|` operator.
+/// This can be useful for composing analyses.
 pub struct DidMerge(pub bool, pub bool);
 
 impl BitOr for DidMerge {
@@ -687,6 +691,8 @@ pub trait Analysis<L: Language>: Sized {
     fn make(egraph: &EGraph<L, Self>, enode: &L) -> Self::Data;
 
     /// An optional hook that allows inspection before a [`union`] occurs.
+    /// When explanations are enabled, it gives two ids that represent the two particular terms being unioned, not the canonical ids for the two eclasses.
+    /// It also gives a justification for the union when explanations are enabled.
     ///
     /// By default it does nothing.
     ///
@@ -695,7 +701,13 @@ pub trait Analysis<L: Language>: Sized {
     ///
     /// [`union`]: EGraph::union()
     #[allow(unused_variables)]
-    fn pre_union(egraph: &EGraph<L, Self>, id1: Id, id2: Id) {}
+    fn pre_union(
+        egraph: &EGraph<L, Self>,
+        id1: Id,
+        id2: Id,
+        justification: &Option<Justification>,
+    ) {
+    }
 
     /// Defines how to merge two `Data`s when their containing
     /// [`EClass`]es merge.
@@ -768,6 +780,28 @@ pub fn merge_min<T: Ord>(to: &mut T, from: T) -> DidMerge {
         }
     }
 }
+
+/// A utility for implementing [`Analysis::merge`]
+/// when the `Data` type is an [`Option`].
+///
+/// Always take a `Some` over a `None`
+/// and calls the given function to merge two `Some`s.
+pub fn merge_option<T>(
+    to: &mut Option<T>,
+    from: Option<T>,
+    merge_fn: impl FnOnce(&mut T, T) -> DidMerge,
+) -> DidMerge {
+    match (to.as_mut(), from) {
+        (None, None) => DidMerge(false, false),
+        (None, from @ Some(_)) => {
+            *to = from;
+            DidMerge(true, false)
+        }
+        (Some(_), None) => DidMerge(false, true),
+        (Some(a), Some(b)) => merge_fn(a, b),
+    }
+}
+
 /// A simple language used for testing.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]

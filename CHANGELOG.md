@@ -2,6 +2,52 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.9.4] - 2023-05-23
+- [#253] Improved rebuilding algorithm using a queue.
+- [#259] Fixed another overflow bug in proof size optimization.
+- Various typo fixes (Thanks @nlewycky)
+
+## [0.9.3] - 2023-02-06
+
+### Added
+- [#215](https://github.com/egraphs-good/egg/pull/215) Added a better intersection algorithms on two egraphs based on "Join Algorithms for the Theory of Uninterpreted Functions". The old intersection algorithm was not complete on the terms in both egraphs, but the new one is. Unfortunately, the new algorithm is quadratic.
+
+### Changed
+- [#230](https://github.com/egraphs-good/egg/pull/230) Fixed a performance bug in `get_string_with_let` that caused printing let-bound proofs to be extremely inefficient.
+
+
+## [0.9.2] - 2022-12-15
+
+### Added
+
+- [#210](https://github.com/egraphs-good/egg/pull/210) Fix crashes in proof generation due to proof size calculations overflowing.
+
+## [0.9.1] - 2022-09-22
+
+### Added
+
+- [#186](https://github.com/egraphs-good/egg/pull/186) Added proof minimization (enabled by default), a greedy algorithm to find smaller proofs
+  - with and `without_explanation_length_optimization` for turning this on and off
+  - `copy_without_unions` for copying an egraph but without any equality information
+  - `id_to_expr` for getting an expression corresponding to a particular enode's id
+- [#197](https://github.com/egraphs-good/egg/pull/197) Added `search_with_limit`, so that matching also stops when it hits scheduling limits.
+
+### Changed
+
+- Changed the `pre_union` hook to support explanations
+  - now provides the `Id` of the two specific enodes that are merged,  not canonical ids.
+  - It also provides the reason for the merge in the form of a `Justification`.
+
+## [0.9.0] - 2022-06-12
+
+### Added
+- Added a way to update analysis data and have it propagate through the e-graph
+
+### Changed
+- Improved documentation
+- Updated dependencies
+- `union` is now allowed when explanations are on
+
 ## [0.8.1] - 2022-05-04
 
 ### Changed
@@ -190,7 +236,12 @@ But hopefully things will be a little more stable from here on out
 since the API is a lot nicer.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/egraphs-good/egg/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/egraphs-good/egg/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/egraphs-good/egg/compare/v0.9.3...v0.9.4
+[0.9.3]: https://github.com/egraphs-good/egg/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/egraphs-good/egg/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/egraphs-good/egg/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/egraphs-good/egg/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/egraphs-good/egg/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/egraphs-good/egg/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/egraphs-good/egg/compare/v0.7.0...v0.7.1

@@ -19,7 +19,10 @@ struct ConstantFold;
 impl Analysis<Prop> for ConstantFold {
     type Data = Option<(bool, PatternAst<Prop>)>;
     fn merge(&mut self, to: &mut Self::Data, from: Self::Data) -> DidMerge {
-        merge_max(to, from)
+        merge_option(to, from, |a, b| {
+            assert_eq!(a.0, b.0, "Merged non-equal constants");
+            DidMerge(false, false)
+        })
     }
 
     fn make(egraph: &EGraph, enode: &Prop) -> Self::Data {
@@ -37,7 +40,7 @@ impl Analysis<Prop> for ConstantFold {
                 format!("(| {} {})", x(a)?, x(b)?).parse().unwrap(),
             )),
             Prop::Implies([a, b]) => Some((
-                x(a)? || !x(b)?,
+                !x(a)? || x(b)?,
                 format!("(-> {} {})", x(a)?, x(b)?).parse().unwrap(),
             )),
         };
@@ -81,7 +84,17 @@ rule! {lem,         "(| ?a (~ ?a))",    "true"                      }
 rule! {or_true,     "(| ?a true)",         "true"                      }
 rule! {and_true,    "(& ?a true)",         "?a"                     }
 rule! {contrapositive, "(-> ?a ?b)",    "(-> (~ ?b) (~ ?a))"     }
-rule! {lem_imply, "(& (-> ?a ?b) (-> (~ ?a) ?c))", "(| ?b ?c)"}
+
+// this has to be a multipattern since (& (-> ?a ?b) (-> (~ ?a) ?c))  !=  (| ?b ?c)
+// see https://github.com/egraphs-good/egg/issues/185
+fn lem_imply() -> Rewrite {
+    multi_rewrite!(
+        "lem_imply";
+        "?value = true = (& (-> ?a ?b) (-> (~ ?a) ?c))"
+        =>
+        "?value = (| ?b ?c)"
+    )
+}
 
 fn prove_something(name: &str, start: &str, rewrites: &[Rewrite], goals: &[&str]) {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -90,12 +103,19 @@ fn prove_something(name: &str, start: &str, rewrites: &[Rewrite], goals: &[&str]
     let start_expr: RecExpr<_> = start.parse().unwrap();
     let goal_exprs: Vec<RecExpr<_>> = goals.iter().map(|g| g.parse().unwrap()).collect();
 
-    let egraph = Runner::default()
+    let mut runner = Runner::default()
         .with_iter_limit(20)
         .with_node_limit(5_000)
-        .with_expr(&start_expr)
-        .run(rewrites)
-        .egraph;
+        .with_expr(&start_expr);
+
+    // we are assume the input expr is true
+    // this is needed for the soundness of lem_imply
+    let true_id = runner.egraph.add(Prop::Bool(true));
+    let root = runner.roots[0];
+    runner.egraph.union(root, true_id);
+    runner.egraph.rebuild();
+
+    let egraph = runner.run(rewrites).egraph;
 
     for (i, (goal_expr, goal_str)) in goal_exprs.iter().zip(goals).enumerate() {
         println!("Trying to prove goal {}: {}", i, goal_str);

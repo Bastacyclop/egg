@@ -32,6 +32,9 @@ for less or more logging.
 
 mod macros;
 
+#[doc(hidden)]
+pub mod test;
+
 pub mod tutorials;
 
 mod dot;
@@ -84,14 +87,17 @@ impl std::fmt::Display for Id {
     }
 }
 
-pub(crate) use {explain::Explain, explain::Justification, unionfind::UnionFind};
+pub(crate) use {explain::Explain, unionfind::UnionFind};
 
 pub use {
     dot::Dot,
     eclass::EClass,
     graph::{Graph, GraphCostFunction},
     egraph::EGraph,
-    explain::{Explanation, FlatExplanation, FlatTerm, TreeExplanation, TreeTerm},
+    explain::{
+        Explanation, FlatExplanation, FlatTerm, Justification, TreeExplanation, TreeTerm,
+        UnionEqualities,
+    },
     extract::*,
     dag_extract::*,
     language::*,
@@ -110,6 +116,3 @@ pub use lp_extract::*;
 fn init_logger() {
     let _ = env_logger::builder().is_test(true).try_init();
 }
-
-#[doc(hidden)]
-pub mod test;

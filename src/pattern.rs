@@ -61,7 +61,7 @@ use crate::*;
 /// ```
 ///
 /// [`FromStr`]: std::str::FromStr
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Pattern<L> {
     /// The actual pattern as a [`RecExpr`]
     pub ast: PatternAst<L>,
@@ -214,6 +214,12 @@ impl<'a, L: Language> From<&'a [L]> for Pattern<L> {
     }
 }
 
+impl<L: Language> From<&RecExpr<L>> for Pattern<L> {
+    fn from(expr: &RecExpr<L>) -> Self {
+        Self::from(expr.as_ref())
+    }
+}
+
 impl<L: Language> From<PatternAst<L>> for Pattern<L> {
     fn from(ast: PatternAst<L>) -> Self {
         Self::new(ast)
@@ -277,7 +283,7 @@ impl<L: Language> Pattern<L> {
 /// The result of searching a [`Searcher`] over one eclass.
 ///
 /// Note that one [`SearchMatches`] can contain many found
-/// substititions. So taking the length of a list of [`SearchMatches`]
+/// substitutions. So taking the length of a list of [`SearchMatches`]
 /// tells you how many eclasses something was matched in, _not_ how
 /// many matches were found total.
 ///
@@ -300,28 +306,37 @@ impl<L: Language, A: Analysis<L>> Searcher<L, A> for Pattern<L> {
         Some(&self)
     }
 
-    fn search(&self, egraph: &EGraph<L, A>) -> Vec<SearchMatches<L>> {
+    fn search_with_limit(&self, egraph: &EGraph<L, A>, limit: usize) -> Vec<SearchMatches<L>> {
         match self.ast.as_ref().last().unwrap() {
             ENodeOrVar::ENode(e) => {
                 #[allow(enum_intrinsics_non_enums)]
                 let key = std::mem::discriminant(e);
                 match egraph.classes_by_op.get(&key) {
                     None => vec![],
-                    Some(ids) => ids
-                        .iter()
-                        .filter_map(|&id| self.search_eclass(egraph, id))
-                        .collect(),
+                    Some(ids) => rewrite::search_eclasses_with_limit(
+                        self,
+                        egraph,
+                        ids.iter().cloned(),
+                        limit,
+                    ),
                 }
             }
-            ENodeOrVar::Var(_) => egraph
-                .classes()
-                .filter_map(|e| self.search_eclass(egraph, e.id))
-                .collect(),
+            ENodeOrVar::Var(_) => rewrite::search_eclasses_with_limit(
+                self,
+                egraph,
+                egraph.classes().map(|e| e.id),
+                limit,
+            ),
         }
     }
 
-    fn search_eclass(&self, egraph: &EGraph<L, A>, eclass: Id) -> Option<SearchMatches<L>> {
-        let substs = self.program.run(egraph, eclass);
+    fn search_eclass_with_limit(
+        &self,
+        egraph: &EGraph<L, A>,
+        eclass: Id,
+        limit: usize,
+    ) -> Option<SearchMatches<L>> {
+        let substs = self.program.run_with_limit(egraph, eclass, limit);
         if substs.is_empty() {
             None
         } else {
@@ -504,5 +519,39 @@ mod tests {
         assert_eq!(n_matches("(f ?x (g ?y))))"), 2);
         assert_eq!(n_matches("(f ?x (g ?x))))"), 1);
         assert_eq!(n_matches("(h ?x 0 0)"), 1);
+    }
+
+    #[test]
+    fn search_with_limit() {
+        crate::init_logger();
+        let init_expr = &"(+ 1 (+ 2 (+ 3 (+ 4 (+ 5 6)))))".parse().unwrap();
+        let rules: Vec<Rewrite<_, ()>> = vec![
+            rewrite!("comm"; "(+ ?x ?y)" => "(+ ?y ?x)"),
+            rewrite!("assoc"; "(+ ?x (+ ?y ?z))" => "(+ (+ ?x ?y) ?z)"),
+        ];
+        let runner = Runner::default().with_expr(init_expr).run(&rules);
+        let egraph = &runner.egraph;
+
+        let len = |m: &Vec<SearchMatches<S>>| -> usize { m.iter().map(|m| m.substs.len()).sum() };
+
+        let pat = &"(+ ?x (+ ?y ?z))".parse::<Pattern<S>>().unwrap();
+        let m = pat.search(egraph);
+        let match_size = 2100;
+        assert_eq!(len(&m), match_size);
+
+        for limit in [1, 10, 100, 1000, 10000] {
+            let m = pat.search_with_limit(egraph, limit);
+            assert_eq!(len(&m), usize::min(limit, match_size));
+        }
+
+        let id = egraph.lookup_expr(init_expr).unwrap();
+        let m = pat.search_eclass(egraph, id).unwrap();
+        let match_size = 540;
+        assert_eq!(m.substs.len(), match_size);
+
+        for limit in [1, 10, 100, 1000] {
+            let m1 = pat.search_eclass_with_limit(egraph, id, limit).unwrap();
+            assert_eq!(m1.substs.len(), usize::min(limit, match_size));
+        }
     }
 }

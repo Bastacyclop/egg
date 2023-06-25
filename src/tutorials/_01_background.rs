@@ -104,7 +104,7 @@ We can define what it means for _represent_ (or _contain_) a term as follows:
 
 - An e-graph represents a term if any of its e-classes do.
 - An e-class represents a term if any of its e-nodes do.
-- An e-node `f(n1, n2, ...)` represents a term `f(t1, t2, ...)` if e-node `ni` represents term `ti`.
+- An e-node `f(n1, n2, ...)` represents a term `f(t1, t2, ...)` if e-class `ni` represents term `ti`.
 
 Here are some e-graphs.
 We picture e-classes as dotted boxes surrounding the equivalent e-nodes.
@@ -157,7 +157,7 @@ Let's put it all together with an example referring to the four e-graphs in the
     associates with multiplication.
    This rewrite is critical to discovering the cancellation of 2s that we are looking for,
      and it still works despite the fact that we applied the "wrong" rewrite previously.
-4. Applying rewrites _x / x → 1_ and _1 × x → x_ doesn't add any new e-nodes,
+4. Applying rewrites _x / x → 1_ and _x × 1 → x_ doesn't add any new e-nodes,
      since all the e-nodes were already present in the e-graph.
    The result only unions e-classes,
      meaning that e-graph actually got _smaller_ from applying these rewrites,
@@ -203,7 +203,7 @@ which calls [`union`]) may not be reflected immediately.
 To restore the e-graph invariants and make these effects visible, the
 user *must* call the [`rebuild`] method.
 
-`egg`'s choice here allows for a higher performance implementation
+`egg`'s choice here allows for a higher performance implementation.
 Maintaining the congruence relation complicates the core e-graph data
 structure and requires an expensive traversal through the e-graph on
 every [`union`].
