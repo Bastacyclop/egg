@@ -46,6 +46,8 @@ mod extract;
 mod language;
 #[cfg(feature = "lp")]
 mod lp_extract;
+#[cfg(feature = "lp")]
+mod lp_extract2;
 mod dag_extract;
 mod machine;
 mod multipattern;
@@ -110,7 +112,10 @@ pub use {
 };
 
 #[cfg(feature = "lp")]
-pub use lp_extract::*;
+pub use {
+    lp_extract::*,
+    lp_extract2::*,
+};
 
 #[cfg(test)]
 fn init_logger() {
