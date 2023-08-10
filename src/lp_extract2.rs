@@ -143,12 +143,12 @@ where
     /// Extract a single rooted term.
     ///
     /// This is just a shortcut for [`LpExtractor::solve_multiple`].
-    pub fn solve(&mut self, root: Id) -> RecExpr<L> {
-        self.solve_multiple(&[root]).0
+    pub fn solve(&mut self, root: Id) -> Option<RecExpr<L>> {
+        self.solve_multiple(&[root]).map(|(expr, roots)| expr)
     }
 
     /// Extract (potentially multiple) roots
-    pub fn solve_multiple(&mut self, roots: &[Id]) -> (RecExpr<L>, Vec<Id>) {
+    pub fn solve_multiple(&mut self, roots: &[Id]) -> Option<(RecExpr<L>, Vec<Id>)> {
         let egraph = self.egraph;
 
         for class in self.vars.values() {
@@ -166,6 +166,9 @@ where
             solution.raw().status(),
             solution.raw().secondary_status()
         );
+        if solution.raw().is_proven_infeasible() {
+            return None;
+        }
 
         let mut todo: Vec<Id> = roots.iter().map(|id| self.egraph.find(*id)).collect();
         let mut expr = RecExpr::default();
@@ -196,7 +199,7 @@ where
         let root_idxs = roots.iter().map(|root| *ids.get(&egraph.find(*root)).expect("LpExtract found no solution")).collect();
 
         assert!(expr.is_dag(), "LpExtract found a cyclic term!: {:?}", expr);
-        (expr, root_idxs)
+        Some((expr, root_idxs))
     }
 }
 
@@ -254,7 +257,7 @@ mod tests {
 
         let mut ext = LpExtractor2::new(&egraph, AstSize);
         ext.timeout(10.0); // way too much time
-        let (exp, ids) = ext.solve_multiple(&[f, g]);
+        let (exp, ids) = ext.solve_multiple(&[f, g]).unwrap();
         println!("{:?}", exp);
         println!("{}", exp);
         assert_eq!(exp.as_ref().len(), 4);
@@ -286,7 +289,7 @@ mod tests {
 
         let mut ext = LpExtractor2::new(&egraph, OnlyLeaves);
         ext.timeout(10.0); // way too much time
-        let (exp, ids) = ext.solve_multiple(&[f, g]);
+        let (exp, ids) = ext.solve_multiple(&[f, g]).unwrap();
         println!("{:?}", exp);
         println!("{}", exp);
         assert_eq!(exp.as_ref().len(), 1);
